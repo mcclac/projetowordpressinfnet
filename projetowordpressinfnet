@@ -1,0 +1,318 @@
+*Conteúdo do arquivo “conteiner.yml”:
+---
+- hosts: 127.0.0.1
+  remote_user: mcclac
+  become: yes
+  tasks:
+    - name: "Executa o container MySQL"
+      docker_container:
+        name: banco
+        image: mysql:5.6
+        env:
+          MYSQL_ROOT_PASSWORD: senha123
+          MYSQL_DATABASE: redmine
+    - name: "Executa o container GLPI"
+      docker_container:
+        name: meu-glpi
+        image: diouxx/glpi
+        links:
+          - "banco:mysql"
+        ports:
+          - "9090:80"
+    - name: "Executa o container redmine"
+      docker_container:
+        name: meu-redmine
+        image: redmine
+        links:
+          - "banco:mysql"
+        ports:
+          - "8080:3000"
+    - name: "Executa o container WordPress"
+      docker_container:
+        name: wordpress
+        image: wordpress
+        links:
+          - "banco:mysql"
+        ports:
+          - "80:80"
+
+*Conteúdo do arquivo ec2.ini.
+Este arquivo estabelece configurações iniciais para as instâncias EC2.
+
+# Ansible EC2 external inventory script settings
+[ec2]
+regions = all
+regions_exclude = us-gov-west-1, cn-north-1
+destination_variable = public_dns_name
+vpc_destination_variable = ip_address
+route53 = False
+# 'all_instances' to True to return all instances regardless of state.
+all_instances = False
+all_rds_instances = False
+include_rds_clusters = False
+all_elasticache_replication_groups = False
+all_elasticache_clusters = False
+all_elasticache_nodes = False
+cache_path = ~/.ansible/tmp
+cache_max_age = 300
+nested_groups = False
+replace_dash_in_groups = True
+expand_csv_tags = False
+
+python inventory/ec2.ini
+
+
+PASTA GROUP_VARS "ALL"
+---
+aws_access_key: "AKIAIABMFYKP67PLMPHQ"
+aws_secret_key: "clbpqSLNRHOR090………………….."
+
+application: "wordpress" 
+target_env: "prod"
+aws_region: "us-east-1"
+aws_region_short: "ue1"
+aws_region_az: "c"
+vpc_name: "vpc-{{ aws_region_short }}-{{ target_env }}-{{ application }}"
+vpc_cidr_block: "172.27.0.0/16"
+public_subnet_1_cidr: "172.27.0.0/18"
+public_subnet_2_cidr: "172.27.64.0/18"
+private_subnet_1_cidr: "172.27.128.0/18"
+private_subnet_2_cidr: "172.27.192.0/18"
+keypair_name: "key_pair_infnet"
+
+ssh_pubkey: 'ssh-rsa MIIEowIBAAKCAQEAoyl6zv9Cj9HWtZShENRQXpvqnmdUlp3DoGz0tLt9Njvdm/RYsCHVHb6AR7oSiS/bUIA7okc61bXZL8wRpYf+X24MTJ6VbHQEWAsrgmJvjhXRzvGv0rPUIyRcmfwjikjDcpUCI8T1d/nuZa4bs9caeWlukKeKvcjKqUVptOG9Hz/oeK39vf2E6vI2SHumqiDYVOK85NQzMne0H24BAivzGlg4B5F1fmLKHEJ/+UzZxSyIGd+3ofeFSnz5D3FWSCD+1J7E3k+p96Dk51vZw0gZ3RZXmkhCFc5lLrjszsG47sPd30tfJcIqvUSuRZM65UFPuK9zdVwhJnuwCX9Qx3tmbQIDAQABAoIBACROW5Rp+m60O7ml+/0ZsVSMDzX2Oj1Vl60/8Wex/Jev1I0aXw26SYjX1gWf4vYB3yRXlG10uiPJ1i0rlJWn4DNt8nCuLQO4AStyONlHfBk6w7fv0bbp6v9y3OQq1eG0dUEu5Q3+iryKscCQcHuhFrQDgOXRUi8O2gG2f2IPhRzJqabViGBikRqglf1r2N+mYw………………………………………………………. marcelo@ubuntu'
+
+
+ROLE VPC
+---
+# tasks file for roles/vpc
+- name: Cria o VPC de nossa aplicacao
+  ec2_vpc_net:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    name: "{{ vpc_name }}"
+    cidr_block: "{{ vpc_cidr_block }}"
+  register: my_vpc
+
+- name: Salva o ID do VPC criado na variavel vpc_id
+  set_fact:
+    vpc_id: "{{ my_vpc.vpc.id }}"
+
+- name: Cria a subnet publica 1
+  ec2_vpc_subnet:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ public_subnet_1_cidr }}"
+    az: "{{ aws_region }}{{ aws_region_az }}"
+    resource_tags:
+      Name: "public-subnet"
+  register: my_public_subnet
+
+- name: Salva o ID da subnet publica na variavel public_subnet_id
+  set_fact:
+    public_subnet_id: "{{ my_public_subnet.subnet.id }}"
+
+- name: Cria um gateway de Internet em nosso VPC
+  ec2_vpc_igw:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    vpc_id: "{{ vpc_id }}"
+  register: my_vpc_igw
+
+- name: Salva o ID do gateway de Internet na variavel igw_id
+  set_fact:
+    igw_id: "{{ my_vpc_igw.gateway_id }}"
+
+- name: Cria uma rota default na subnet publica, apontando para nosso gateway de Internet
+  ec2_vpc_route_table:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    vpc_id: "{{ vpc_id }}"
+    tags:
+      Name: "Public"
+    subnets:
+      - "{{ public_subnet_id }}"
+    routes:
+      - dest: "0.0.0.0/0"
+        gateway_id: "{{ igw_id }}"
+
+
+
+ROLE KAYPAIR 
+---
+# tasks file for roles/ec2-app
+- name: Cria o grupo de seguranca para nossa instancia EC2
+  ec2_group:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    vpc_id: "{{ vpc_id }}"
+    name: "app"
+    description: "grupo de seguranca da instancia app"
+    rules:
+      - proto: tcp
+        from_port: 22
+        to_port: 22
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 80
+        to_port: 80
+        cidr_ip: 0.0.0.0/0
+    rules_egress:
+      - proto: all
+        cidr_ip: 0.0.0.0/0
+  register: app_ec2_sg
+  tags: [ 'app-ec2' ]
+
+- name: Inicia a instancia para nossa aplicacao
+  ec2:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    region: "{{ aws_region }}"
+    vpc_subnet_id: "{{ subnet }}"
+    group_id: "{{ app_ec2_sg.group_id }}"
+    instance_type: "{{ instance_type }}"
+    image: "{{ image }}"
+    wait: yes
+    exact_count: "{{ count }}"
+    count_tag:
+      Name: "app"
+    assign_public_ip: no
+    keypair: "{{ keypair_name }}"
+    volumes:
+      - device_name: /dev/sda1
+        volume_type: gp2
+        volume_size: "{{ volume_size }}"
+    instance_tags:
+      Name: "app"
+  register: app_ec2_instance
+  tags: [ 'app-ec2' ]
+
+- name: Associa um IP publico com a instancia recem-criada
+  ec2_eip:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+    region: "{{ aws_region }}"
+    in_vpc: yes
+    reuse_existing_ip_allowed: yes
+    device_id: "{{ item.id }}"
+  tags: [ 'app-ec2' ]
+  with_items: "{{ app_ec2_instance.tagged_instances }}"
+  register: app_ec2_eip
+  when: item.public_ip == None
+
+
+ROLE DOCKER
+---
+# tasks file for roles/docker
+- name: instala dependencias Docker
+  apt:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - apt-transport-https
+    - ca-certificates
+    - curl
+    - gnupg2
+    - software-properties-common
+    - python-pip
+ 
+- name: instala modulos python que podem ser necessarios
+  pip:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - urllib3
+    - pyOpenSSL
+    - ndg-httpsclient
+    - pyasn1
+
+- name: adiciona a chave de assinatura de pacotes Ubuntu do Docker
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+
+- name: adiciona o repositorio Docker ao sistema
+  apt_repository:
+    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable"
+    state: present
+      
+- name: instala o pacote docker-ce
+  apt:
+    name: docker-ce
+    state: present
+    update_cache: yes
+
+
+ROLE WORDPRESS E BANCO MYSQL 
+---
+# tasks file for roles/wordpress
+- name: instala a biblioteca para gerenciamento docker
+  apt:
+    name: python-docker
+
+- name: cria o diretório onde a base de dados MySQL sera salva
+  file:
+    path: /dados-banco
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: cria container MySQL, com dados salvos na pasta /dados-banco
+  docker_container:
+    name: "banco"
+    image: "mysql:5.7"
+    env:
+      MYSQL_ROOT_PASSWORD: password
+    volumes:
+      - /dados-banco:/var/lib/mysql
+
+- name: cria container do wordpress
+  docker_container:
+    name: "meublog"
+    image: "wordpress"
+    links:
+      - "banco:mysql"
+    ports:
+      - "80:80"
+
+ARQUIVO PLAYBOOK.YAML
+---
+- hosts: localhost
+  connection: local
+  roles:
+  - { role: keypair, tags: [ 'keypairs', 'infra' ] }
+  - { role: vpc, tags: [ 'vpc', 'infra', 'always' ] }
+  - { role: ec2-app, tags: [ 'ec2-app', 'infra' ] }
+  
+- hosts: tag_Name_app
+  gather_facts: no
+  pre_tasks:
+    - name: instala o Python 2
+      raw: sudo bash -c "test -e /usr/bin/python || (apt -y update && apt install -y python-minimal aptitude)"
+      tags: [ 'always' ]
+    - name: reune informacoes sobre o sistema operacional
+      setup:
+      tags: [ 'always' ]
+    - name: atualiza os pacotes do SO
+      apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: [ 'app' ]
+  roles:
+    - { role: docker, tags: [ 'docker' ] }
+    - { role: wordpress, tags: [ 'app', 'wordpress' ] }
+
